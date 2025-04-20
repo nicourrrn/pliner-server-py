@@ -1,46 +1,33 @@
-from pydantic import BaseModel, Field
-from fastapi import FastAPI
 from databases import Database as DatabaseCore
-from typing import Optional
-from fastapi import Request
+from datetime import datetime
 import sqlite3
 
-import uuid
+from pkg.models import User, Process, Step
 
 
-class Step(BaseModel):
-    id: str
-    text: str
-    done: bool
-    isMandatory: bool
+def from_dart_datetime_to_timestamp(dart_datetime: str) -> int:
+    """
+    Convert a Dart datetime string to a Unix timestamp.
+    The Dart datetime string is in the format 'YYYY-MM-DDTHH:MM:SS.sssZ'.
+    """
+    dt = datetime.strptime(dart_datetime, "%Y-%m-%dT%H:%M:%S.%f")
+    return int(dt.timestamp())
 
 
-class Process(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    description: str = Field(default="")
-    isMandatory: bool = Field(default=False)
-    processType: str
-    timeNeeded: int
-    group: str
-    deadline: str
-    assignedAt: str
-    steps: list[Step] = Field(default_factory=list)
-
-
-class User(BaseModel):
-    username: str
-    password: str
-    processes: list[Process] = Field(default_factory=list)
+def from_timestamp_to_dart_datetime(timestamp: int) -> str:
+    """
+    Convert a Unix timestamp to a Dart datetime string.
+    The Dart datetime string is in the format 'YYYY-MM-DDTHH:MM:SS.sss'.
+    """
+    dt = datetime.fromtimestamp(timestamp)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
 class Database:
     def __init__(self, db_name: str):
-        self.db_name = db_name
-        self.connection: Optional[DatabaseCore] = None
+        self.connection = DatabaseCore(db_name)
 
     async def connect(self):
-        self.connection = DatabaseCore(self.db_name)
         await self.connection.connect()
         await self.create_tables()
 
@@ -64,8 +51,9 @@ class Database:
                 timeNeeded INTEGER,
                 group_name TEXT,
                 deadline TEXT,
-                assignedAt TEXT,
+                assignedAt int,
                 owner TEXT,
+                editAt int,
                 FOREIGN KEY (owner) REFERENCES users (username)
             )
         """
@@ -84,8 +72,7 @@ class Database:
         )
 
     async def close(self):
-        if self.connection:
-            await self.connection.disconnect()
+        await self.connection.disconnect()
 
 
 async def create_user(db: Database, username: str, password: str):
@@ -97,11 +84,13 @@ async def create_user(db: Database, username: str, password: str):
 
 async def create_process(db: Database, process: Process, owner: str):
     query = """
-        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, group_name, deadline, assignedAt, owner)
-        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :group, :deadline, :assignedAt, :owner)
+        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, group_name, deadline, assignedAt, owner, editAt)
+        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :group, :deadline, :assignedAt, :owner, :editAt)
     """
     values = process.model_dump()
     values["owner"] = owner
+    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
+    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
     del values["steps"]
     try:
         await db.connection.execute(query=query, values=values)
@@ -109,8 +98,8 @@ async def create_process(db: Database, process: Process, owner: str):
         query_update = """
             UPDATE processes
             SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-                timeNeeded = :timeNeeded, group_name = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner
-            WHERE id = :id
+                timeNeeded = :timeNeeded, group_name = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+            WHERE id = :id and editAt < :editAt 
         """
         await db.connection.execute(query=query_update, values=values)
 
@@ -131,12 +120,12 @@ async def create_step(db: Database, step: Step, process_id: str):
         query_update = """
             UPDATE steps
             SET text = :text, done = :done, isMandatory = :isMandatory, process_id = :process_id 
-            WHERE id = :id 
+            WHERE id = :id
         """
         await db.connection.execute(query=query_update, values=values)
 
 
-async def get_user(db: Database, username: str) -> Optional[User]:
+async def get_user(db: Database, username: str) -> User | None:
     query = "SELECT * FROM users WHERE username = :username"
     row = await db.connection.fetch_one(query=query, values={"username": username})
     if row:
@@ -144,11 +133,13 @@ async def get_user(db: Database, username: str) -> Optional[User]:
     return None
 
 
-async def get_process(db: Database, process_id: str) -> Optional[Process]:
+async def get_process(db: Database, process_id: str) -> Process | None:
     query = "SELECT * FROM processes WHERE id = :id"
     row = await db.connection.fetch_one(query=query, values={"id": process_id})
     if row:
         steps = await get_steps(db, process_id)
+        assignedAt = from_timestamp_to_dart_datetime(row["assignedAt"])
+        editAt = from_timestamp_to_dart_datetime(row["editAt"])
         return Process(
             id=row["id"],
             name=row["name"],
@@ -158,8 +149,9 @@ async def get_process(db: Database, process_id: str) -> Optional[Process]:
             timeNeeded=row["timeNeeded"],
             group=row["group_name"],
             deadline=row["deadline"],
-            assignedAt=row["assignedAt"],
+            assignedAt=assignedAt,
             steps=steps,
+            editAt=editAt,
         )
     return None
 
@@ -184,6 +176,8 @@ async def get_all_user_processes(db: Database, user: User) -> list[Process]:
     processes = []
     for row in rows:
         steps = await get_steps(db, row["id"])
+        assignedAt = from_timestamp_to_dart_datetime(row["assignedAt"])
+        editAt = from_timestamp_to_dart_datetime(row["editAt"])
         processes.append(
             Process(
                 id=row["id"],
@@ -194,88 +188,15 @@ async def get_all_user_processes(db: Database, user: User) -> list[Process]:
                 timeNeeded=row["timeNeeded"],
                 group=row["group_name"],
                 deadline=row["deadline"],
-                assignedAt=row["assignedAt"],
+                assignedAt=assignedAt,
                 steps=steps,
+                editAt=editAt,
             )
         )
     return processes
 
 
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    db = Database("sqlite+aiosqlite:///database.db")
-    await db.connect()
-    app.state.db = db
-    print("db connected")
-    yield
-    await db.close()
-    print("Database disconnected")
-
-
-app = FastAPI(lifespan=lifespan)
-
-
-@app.post("/users/")
-async def create_user_endpoint(user: User, req: Request):
-    db = req.app.state.db
-    await create_user(db, user.username, user.password)
-    return {"message": "User created successfully"}
-
-
-@app.post("/processes/")
-async def create_process_endpoint(process: Process, owner: str, req: Request):
-    db = req.app.state.db
-    await create_process(db, process, owner)
-    return {"message": "Process created successfully"}
-
-
-@app.get("/users/{username}")
-async def get_user_endpoint(username: str, req: Request):
-    db = req.app.state.db
-    user = await get_user(db, username)
-    if user:
-        user.processes = await get_all_user_processes(db, user)
-        return user
-    return {"message": "User not found"}
-
-
-@app.get("/processes/{process_id}")
-async def get_process_endpoint(process_id: str, req: Request):
-    db = req.app.state.db
-    process = await get_process(db, process_id)
-    if process:
-        process.steps = await get_steps(db, process_id)
-        return process
-    return {"message": "Process not found"}
-
-
-@app.get("/steps/{process_id}")
-async def get_steps_endpoint(process_id: str, req: Request):
-    db = req.app.state.db
-    steps = await get_steps(db, process_id)
-    if steps:
-        return steps
-    return {"message": "Steps not found"}
-
-
-@app.get("/processes/user/{username}")
-async def get_user_processes_endpoint(username: str, req: Request):
-    db = req.app.state.db
-    user = await get_user(db, username)
-    if user:
-        processes = await get_all_user_processes(db, user)
-        return processes
-    return {"message": "User not found"}
-
-
-def main():
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-if __name__ == "__main__":
-    main()
+async def get_usernames(db: Database) -> list[str]:
+    query = "SELECT username FROM users"
+    rows = await db.connection.fetch_all(query=query)
+    return [row["username"] for row in rows]
