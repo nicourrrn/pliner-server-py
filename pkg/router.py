@@ -4,10 +4,13 @@ from fastapi import Request
 from pkg.database import (
     create_user,
     create_process,
+    delete_process,
+    delete_steps,
     get_user,
     get_process,
     get_steps,
     get_all_user_processes,
+    update_process,
 )
 
 from pkg.models import User, Process
@@ -47,6 +50,13 @@ async def create_process_endpoint(process: Process, owner: str, req: Request):
     return {"message": "Process created successfully"}
 
 
+@router.put("/processes/")
+async def update_process_endpoint(process: Process, owner: str, req: Request):
+    db = req.app.state.db
+    await update_process(db, process, owner)
+    return {"message": "Process updated successfully"}
+
+
 @router.get("/processes/{process_id}")
 async def get_process_endpoint(process_id: str, with_steps: bool, req: Request):
     db = req.app.state.db
@@ -76,3 +86,17 @@ async def get_user_processes_endpoint(username: str, req: Request):
         processes = await get_all_user_processes(db, user)
         return processes
     return {"message": "User not found"}
+
+
+@router.delete("/processes/{process_id}")
+async def delete_process_endpoint(process_id: str, req: Request):
+    db = req.app.state.db
+    await delete_process(db, process_id)
+    return {"message": "Process deleted successfully"}
+
+
+@router.delete("/steps")
+async def delete_steps_endpoint(step_ids: list[str], req: Request):
+    db = req.app.state.db
+    await delete_steps(db, step_ids)
+    return {"message": "Steps deleted successfully"}

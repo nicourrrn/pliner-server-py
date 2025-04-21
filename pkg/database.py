@@ -107,6 +107,21 @@ async def create_process(db: Database, process: Process, owner: str):
         await create_step(db, step, process.id)
 
 
+async def update_process(db: Database, process: Process, owner: str):
+    query_update = """
+        UPDATE processes
+        SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
+            timeNeeded = :timeNeeded, group_name = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+        WHERE id = :id and editAt < :editAt
+    """
+    values = process.model_dump()
+    values["owner"] = owner
+    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
+    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
+    del values["steps"]
+    await db.connection.execute(query=query_update, values=values)
+
+
 async def create_step(db: Database, step: Step, process_id: str):
     query = """
         INSERT INTO steps (id, text, done, isMandatory, process_id)
@@ -123,6 +138,16 @@ async def create_step(db: Database, step: Step, process_id: str):
             WHERE id = :id
         """
         await db.connection.execute(query=query_update, values=values)
+
+
+async def update_step(db: Database, step: Step, process_id: str):
+    values = step.model_dump() | {"process_id": process_id}
+    query = """
+            UPDATE steps
+            SET text = :text, done = :done, isMandatory = :isMandatory, process_id = :process_id 
+            WHERE id = :id
+        """
+    await db.connection.execute(query=query, values=values)
 
 
 async def get_user(db: Database, username: str) -> User | None:
@@ -193,6 +218,8 @@ async def get_all_user_processes(db: Database, user: User) -> list[Process]:
                 editAt=editAt,
             )
         )
+
+    print("Process getted")
     return processes
 
 
@@ -200,3 +227,16 @@ async def get_usernames(db: Database) -> list[str]:
     query = "SELECT username FROM users"
     rows = await db.connection.fetch_all(query=query)
     return [row["username"] for row in rows]
+
+
+async def delete_process(db: Database, process_id: str):
+    query = "DELETE from steps WHERE process_id = :process_id"
+    await db.connection.execute(query=query, values={"process_id": process_id})
+    query = "DELETE from processes WHERE id = :id"
+    await db.connection.execute(query=query, values={"id": process_id})
+    print("deleted")
+
+
+async def delete_steps(db: Database, step_ids: list[str]):
+    query = "DELETE from steps WHERE id IN :ids"
+    await db.connection.execute(query=query, values={"ids": tuple(step_ids)})
