@@ -11,9 +11,10 @@ from pkg.database import (
     get_steps,
     get_all_user_processes,
     update_process,
+    update_step,
 )
 
-from pkg.models import User, Process
+from pkg.models import User, Process, Step
 
 
 router = APIRouter()
@@ -100,3 +101,11 @@ async def delete_steps_endpoint(step_ids: list[str], req: Request):
     db = req.app.state.db
     await delete_steps(db, step_ids)
     return {"message": "Steps deleted successfully"}
+
+
+@router.put("/processes/{process_id}/steps")
+async def update_steps_endpoint(process_id: str, steps: list[Step], req: Request):
+    db = req.app.state.db
+    for step in steps:
+        await update_step(db, step, process_id)
+    return {"message": "Steps updated successfully"}

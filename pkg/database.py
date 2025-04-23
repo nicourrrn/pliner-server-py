@@ -46,14 +46,14 @@ class Database:
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 description TEXT,
-                isMandatory BOOLEAN,
+                isMandatory INT,
                 processType TEXT,
                 timeNeeded INTEGER,
-                group_name TEXT,
+                groupName TEXT,
                 deadline TEXT,
-                assignedAt int,
+                assignedAt INT,
                 owner TEXT,
-                editAt int,
+                editAt INT,
                 FOREIGN KEY (owner) REFERENCES users (username)
             )
         """
@@ -63,10 +63,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS steps (
                 id TEXT PRIMARY KEY,
                 text TEXT,
-                done BOOLEAN,
-                isMandatory BOOLEAN,
-                process_id TEXT,
-                FOREIGN KEY (process_id) REFERENCES processes (id)
+                done INT,
+                isMandatory INT,
+                processId TEXT,
+                FOREIGN KEY (processId) REFERENCES processes (id)
             )
         """
         )
@@ -84,7 +84,7 @@ async def create_user(db: Database, username: str, password: str):
 
 async def create_process(db: Database, process: Process, owner: str):
     query = """
-        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, group_name, deadline, assignedAt, owner, editAt)
+        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, groupName, deadline, assignedAt, owner, editAt)
         VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :group, :deadline, :assignedAt, :owner, :editAt)
     """
     values = process.model_dump()
@@ -98,7 +98,7 @@ async def create_process(db: Database, process: Process, owner: str):
         query_update = """
             UPDATE processes
             SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-                timeNeeded = :timeNeeded, group_name = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+                timeNeeded = :timeNeeded, groupName = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
             WHERE id = :id and editAt < :editAt 
         """
         await db.connection.execute(query=query_update, values=values)
@@ -111,7 +111,7 @@ async def update_process(db: Database, process: Process, owner: str):
     query_update = """
         UPDATE processes
         SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-            timeNeeded = :timeNeeded, group_name = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+            timeNeeded = :timeNeeded, groupName = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
         WHERE id = :id and editAt < :editAt
     """
     values = process.model_dump()
@@ -124,27 +124,27 @@ async def update_process(db: Database, process: Process, owner: str):
 
 async def create_step(db: Database, step: Step, process_id: str):
     query = """
-        INSERT INTO steps (id, text, done, isMandatory, process_id)
-        VALUES (:id, :text, :done, :isMandatory, :process_id)
+        INSERT INTO steps (id, text, done, isMandatory, processId)
+        VALUES (:id, :text, :done, :isMandatory, :processId)
     """
     values = step.model_dump()
-    values["process_id"] = process_id
+    values["processId"] = process_id
     try:
         await db.connection.execute(query=query, values=values)
     except sqlite3.IntegrityError:
         query_update = """
             UPDATE steps
-            SET text = :text, done = :done, isMandatory = :isMandatory, process_id = :process_id 
+            SET text = :text, done = :done, isMandatory = :isMandatory, processId = :processId 
             WHERE id = :id
         """
         await db.connection.execute(query=query_update, values=values)
 
 
 async def update_step(db: Database, step: Step, process_id: str):
-    values = step.model_dump() | {"process_id": process_id}
+    values = step.model_dump() | {"processId": process_id}
     query = """
             UPDATE steps
-            SET text = :text, done = :done, isMandatory = :isMandatory, process_id = :process_id 
+            SET text = :text, done = :done, isMandatory = :isMandatory, processId = :processId 
             WHERE id = :id
         """
     await db.connection.execute(query=query, values=values)
@@ -172,7 +172,7 @@ async def get_process(db: Database, process_id: str) -> Process | None:
             isMandatory=row["isMandatory"],
             processType=row["processType"],
             timeNeeded=row["timeNeeded"],
-            group=row["group_name"],
+            groupName=row["groupName"],
             deadline=row["deadline"],
             assignedAt=assignedAt,
             steps=steps,
@@ -182,8 +182,8 @@ async def get_process(db: Database, process_id: str) -> Process | None:
 
 
 async def get_steps(db: Database, process_id: str) -> list[Step]:
-    query = "SELECT * FROM steps WHERE process_id = :process_id"
-    rows = await db.connection.fetch_all(query=query, values={"process_id": process_id})
+    query = "SELECT * FROM steps WHERE processId = :processId"
+    rows = await db.connection.fetch_all(query=query, values={"processId": process_id})
     return [
         Step(
             id=row["id"],
@@ -211,7 +211,7 @@ async def get_all_user_processes(db: Database, user: User) -> list[Process]:
                 isMandatory=row["isMandatory"],
                 processType=row["processType"],
                 timeNeeded=row["timeNeeded"],
-                group=row["group_name"],
+                groupName=row["groupName"],
                 deadline=row["deadline"],
                 assignedAt=assignedAt,
                 steps=steps,
@@ -230,8 +230,8 @@ async def get_usernames(db: Database) -> list[str]:
 
 
 async def delete_process(db: Database, process_id: str):
-    query = "DELETE from steps WHERE process_id = :process_id"
-    await db.connection.execute(query=query, values={"process_id": process_id})
+    query = "DELETE from steps WHERE processId = :processId"
+    await db.connection.execute(query=query, values={"processId": process_id})
     query = "DELETE from processes WHERE id = :id"
     await db.connection.execute(query=query, values={"id": process_id})
     print("deleted")
