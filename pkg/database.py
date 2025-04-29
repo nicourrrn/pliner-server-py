@@ -40,6 +40,14 @@ class Database:
             )
         """
         )
+
+        await self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deletedProcesses (
+                id TEXT PRIMARY KEY
+            )
+        """
+        )
         await self.connection.execute(
             """
             CREATE TABLE IF NOT EXISTS processes (
@@ -83,9 +91,14 @@ async def create_user(db: Database, username: str, password: str):
 
 
 async def create_process(db: Database, process: Process, owner: str):
+    query = "select id from deletedProcesses where id = :id"
+    row = await db.connection.fetch_one(query=query, values={"id": process.id})
+    if row:
+        raise sqlite3.IntegrityError("Process already deleted")
+
     query = """
         INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, groupName, deadline, assignedAt, owner, editAt)
-        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :group, :deadline, :assignedAt, :owner, :editAt)
+        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :groupName, :deadline, :assignedAt, :owner, :editAt)
     """
     values = process.model_dump()
     values["owner"] = owner
@@ -98,7 +111,7 @@ async def create_process(db: Database, process: Process, owner: str):
         query_update = """
             UPDATE processes
             SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-                timeNeeded = :timeNeeded, groupName = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+                timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
             WHERE id = :id and editAt < :editAt 
         """
         await db.connection.execute(query=query_update, values=values)
@@ -111,7 +124,7 @@ async def update_process(db: Database, process: Process, owner: str):
     query_update = """
         UPDATE processes
         SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-            timeNeeded = :timeNeeded, groupName = :group, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+            timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
         WHERE id = :id and editAt < :editAt
     """
     values = process.model_dump()
@@ -234,7 +247,20 @@ async def delete_process(db: Database, process_id: str):
     await db.connection.execute(query=query, values={"processId": process_id})
     query = "DELETE from processes WHERE id = :id"
     await db.connection.execute(query=query, values={"id": process_id})
-    print("deleted")
+    query = "INSERT INTO deletedProcesses (id) VALUES (:id)"
+    await db.connection.execute(query=query, values={"id": process_id})
+
+
+async def get_deleted_processes(db: Database) -> list[str]:
+    query = "SELECT id FROM deletedProcesses"
+    rows = await db.connection.fetch_all(query=query)
+    return [row["id"] for row in rows]
+
+
+async def is_process_deleted(db: Database, process_id: str) -> bool:
+    query = "SELECT id FROM deletedProcesses WHERE id = :id"
+    row = await db.connection.fetch_one(query=query, values={"id": process_id})
+    return row is not None
 
 
 async def delete_steps(db: Database, step_ids: list[str]):
