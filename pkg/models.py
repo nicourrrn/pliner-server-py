@@ -61,3 +61,16 @@ class User(BaseModel):
     username: str
     password: str
     processes: list[Process] = Field(default_factory=list)
+
+
+class DatabaseException(Exception): ...
+
+
+class IsDeletedProcess(BaseModel):
+    id: str
+    isDeleted: bool
+
+
+class EditAtProcess(BaseModel):
+    id: str
+    editAt: str

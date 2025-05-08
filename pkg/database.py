@@ -2,7 +2,7 @@ from databases import Database as DatabaseCore
 from datetime import datetime
 import sqlite3
 
-from pkg.models import User, Process, Step
+from pkg.models import DatabaseException, User, Process, Step
 
 
 def from_dart_datetime_to_timestamp(dart_datetime: str) -> int:
@@ -163,12 +163,12 @@ async def update_step(db: Database, step: Step, process_id: str):
     await db.connection.execute(query=query, values=values)
 
 
-async def get_user(db: Database, username: str) -> User | None:
+async def get_user(db: Database, username: str) -> User:
     query = "SELECT * FROM users WHERE username = :username"
     row = await db.connection.fetch_one(query=query, values={"username": username})
     if row:
         return User(username=row["username"], password=row["password"], processes=[])
-    return None
+    raise DatabaseException("User not found")
 
 
 async def get_process(db: Database, process_id: str) -> Process | None:
@@ -247,8 +247,11 @@ async def delete_process(db: Database, process_id: str):
     await db.connection.execute(query=query, values={"processId": process_id})
     query = "DELETE from processes WHERE id = :id"
     await db.connection.execute(query=query, values={"id": process_id})
-    query = "INSERT INTO deletedProcesses (id) VALUES (:id)"
-    await db.connection.execute(query=query, values={"id": process_id})
+    try:
+        query = "INSERT INTO deletedProcesses (id) VALUES (:id)"
+        await db.connection.execute(query=query, values={"id": process_id})
+    except sqlite3.IntegrityError:
+        print("Process already deleted")
 
 
 async def get_deleted_processes(db: Database) -> list[str]:

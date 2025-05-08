@@ -1,7 +1,5 @@
 from passlib.context import CryptContext
 import jwt
-from .models import User
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import os
