@@ -2,7 +2,7 @@ from databases import Database as DatabaseCore
 from datetime import datetime
 import sqlite3
 
-from pkg.models import DatabaseException, User, Process, Step
+from pkg.models import DatabaseException, EditAtProcess, User, Process, Step
 
 
 def from_dart_datetime_to_timestamp(dart_datetime: str) -> int:
@@ -83,84 +83,17 @@ class Database:
         await self.connection.disconnect()
 
 
+async def get_users(db: Database) -> list[str]:
+    query = "SELECT username FROM users"
+    rows = await db.connection.fetch_all(query=query)
+    return [row["username"] for row in rows]
+
+
 async def create_user(db: Database, username: str, password: str):
     query = "INSERT INTO users (username, password) VALUES (:username, :password)"
     await db.connection.execute(
         query=query, values={"username": username, "password": password}
     )
-
-
-async def create_process(db: Database, process: Process, owner: str):
-    query = "select id from deletedProcesses where id = :id"
-    row = await db.connection.fetch_one(query=query, values={"id": process.id})
-    if row:
-        raise sqlite3.IntegrityError("Process already deleted")
-
-    query = """
-        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, groupName, deadline, assignedAt, owner, editAt)
-        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :groupName, :deadline, :assignedAt, :owner, :editAt)
-    """
-    values = process.model_dump()
-    values["owner"] = owner
-    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
-    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
-    del values["steps"]
-    try:
-        await db.connection.execute(query=query, values=values)
-    except sqlite3.IntegrityError:
-        query_update = """
-            UPDATE processes
-            SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-                timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
-            WHERE id = :id and editAt < :editAt 
-        """
-        await db.connection.execute(query=query_update, values=values)
-
-    for step in process.steps:
-        await create_step(db, step, process.id)
-
-
-async def update_process(db: Database, process: Process, owner: str):
-    query_update = """
-        UPDATE processes
-        SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-            timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
-        WHERE id = :id and editAt < :editAt
-    """
-    values = process.model_dump()
-    values["owner"] = owner
-    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
-    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
-    del values["steps"]
-    await db.connection.execute(query=query_update, values=values)
-
-
-async def create_step(db: Database, step: Step, process_id: str):
-    query = """
-        INSERT INTO steps (id, text, done, isMandatory, processId)
-        VALUES (:id, :text, :done, :isMandatory, :processId)
-    """
-    values = step.model_dump()
-    values["processId"] = process_id
-    try:
-        await db.connection.execute(query=query, values=values)
-    except sqlite3.IntegrityError:
-        query_update = """
-            UPDATE steps
-            SET text = :text, done = :done, isMandatory = :isMandatory, processId = :processId 
-            WHERE id = :id
-        """
-        await db.connection.execute(query=query_update, values=values)
-
-
-async def update_step(db: Database, step: Step, process_id: str):
-    values = step.model_dump() | {"processId": process_id}
-    query = """
-            UPDATE steps
-            SET text = :text, done = :done, isMandatory = :isMandatory, processId = :processId 
-            WHERE id = :id
-        """
-    await db.connection.execute(query=query, values=values)
 
 
 async def get_user(db: Database, username: str) -> User:
@@ -171,11 +104,10 @@ async def get_user(db: Database, username: str) -> User:
     raise DatabaseException("User not found")
 
 
-async def get_process(db: Database, process_id: str) -> Process | None:
+async def get_process(db: Database, process_id: str) -> Process:
     query = "SELECT * FROM processes WHERE id = :id"
     row = await db.connection.fetch_one(query=query, values={"id": process_id})
     if row:
-        steps = await get_steps(db, process_id)
         assignedAt = from_timestamp_to_dart_datetime(row["assignedAt"])
         editAt = from_timestamp_to_dart_datetime(row["editAt"])
         return Process(
@@ -188,32 +120,18 @@ async def get_process(db: Database, process_id: str) -> Process | None:
             groupName=row["groupName"],
             deadline=row["deadline"],
             assignedAt=assignedAt,
-            steps=steps,
+            steps=[],
             editAt=editAt,
         )
-    return None
+    raise DatabaseException("Process not found")
 
 
-async def get_steps(db: Database, process_id: str) -> list[Step]:
-    query = "SELECT * FROM steps WHERE processId = :processId"
-    rows = await db.connection.fetch_all(query=query, values={"processId": process_id})
-    return [
-        Step(
-            id=row["id"],
-            text=row["text"],
-            done=row["done"],
-            isMandatory=row["isMandatory"],
-        )
-        for row in rows
-    ]
-
-
-async def get_all_user_processes(db: Database, user: User) -> list[Process]:
+async def get_processes_by_user(db: Database, owner: str) -> list[Process]:
     query = "SELECT * FROM processes WHERE owner = :owner"
-    rows = await db.connection.fetch_all(query=query, values={"owner": user.username})
+    rows = await db.connection.fetch_all(query=query, values={"owner": owner})
     processes = []
     for row in rows:
-        steps = await get_steps(db, row["id"])
+        steps = await get_steps_by_process(db, row["id"])
         assignedAt = from_timestamp_to_dart_datetime(row["assignedAt"])
         editAt = from_timestamp_to_dart_datetime(row["editAt"])
         processes.append(
@@ -231,15 +149,89 @@ async def get_all_user_processes(db: Database, user: User) -> list[Process]:
                 editAt=editAt,
             )
         )
-
-    print("Process getted")
     return processes
 
 
-async def get_usernames(db: Database) -> list[str]:
-    query = "SELECT username FROM users"
-    rows = await db.connection.fetch_all(query=query)
-    return [row["username"] for row in rows]
+async def get_edit_at_by_user(db: Database, owner: str) -> list[EditAtProcess]:
+    query = "SELECT id, editAt FROM processes WHERE owner = :owner"
+    rows = await db.connection.fetch_all(query=query, values={"owner": owner})
+    return [
+        EditAtProcess(
+            id=row["id"],
+            editAt=from_timestamp_to_dart_datetime(row["editAt"]),
+        )
+        for row in rows
+    ]
+
+
+async def get_steps_by_process(db: Database, process_id: str) -> list[Step]:
+    query = "SELECT * FROM steps WHERE processId = :processId"
+    rows = await db.connection.fetch_all(query=query, values={"processId": process_id})
+    return [
+        Step(
+            id=row["id"],
+            text=row["text"],
+            done=row["done"],
+            isMandatory=row["isMandatory"],
+        )
+        for row in rows
+    ]
+
+
+async def create_process(db: Database, process: Process, owner: str):
+    if await is_deleted_process(db, process.id):
+        raise DatabaseException("Process already deleted")
+
+    query = """
+        INSERT INTO processes (id, name, description, isMandatory, processType, timeNeeded, groupName, deadline, assignedAt, owner, editAt)
+        VALUES (:id, :name, :description, :isMandatory, :processType, :timeNeeded, :groupName, :deadline, :assignedAt, :owner, :editAt)
+    """
+    values = process.model_dump(exclude={"steps"}) | {"owner": owner}
+    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
+    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
+    try:
+        await db.connection.execute(query=query, values=values)
+    except sqlite3.IntegrityError:
+        raise DatabaseException("Process already exists")
+
+    for step in process.steps:
+        await create_step(db, step, process.id)
+
+
+async def create_step(db: Database, step: Step, process_id: str):
+    query = """
+        INSERT INTO steps (id, text, done, isMandatory, processId)
+        VALUES (:id, :text, :done, :isMandatory, :processId)
+    """
+    values = step.model_dump() | {"processId": process_id}
+    try:
+        await db.connection.execute(query=query, values=values)
+    except sqlite3.IntegrityError:
+        raise DatabaseException("Step already exists")
+
+
+async def update_process(db: Database, process: Process, owner: str):
+    query_update = """
+        UPDATE processes
+        SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
+            timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt,
+            owner = :owner, editAt = :editAt
+        WHERE id = :id and editAt < :editAt
+    """
+    values = process.model_dump(exclude={"steps"}) | {"onwer": owner}
+    values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
+    values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
+    await db.connection.execute(query=query_update, values=values)
+
+
+async def update_step(db: Database, step: Step):
+    values = step.model_dump()
+    query = """
+            UPDATE steps
+            SET text = :text, done = :done, isMandatory = :isMandatory 
+            WHERE id = :id
+        """
+    await db.connection.execute(query=query, values=values)
 
 
 async def delete_process(db: Database, process_id: str):
@@ -251,7 +243,7 @@ async def delete_process(db: Database, process_id: str):
         query = "INSERT INTO deletedProcesses (id) VALUES (:id)"
         await db.connection.execute(query=query, values={"id": process_id})
     except sqlite3.IntegrityError:
-        print("Process already deleted")
+        raise DatabaseException("Process already deleted")
 
 
 async def get_deleted_processes(db: Database) -> list[str]:
@@ -260,7 +252,7 @@ async def get_deleted_processes(db: Database) -> list[str]:
     return [row["id"] for row in rows]
 
 
-async def is_process_deleted(db: Database, process_id: str) -> bool:
+async def is_deleted_process(db: Database, process_id: str) -> bool:
     query = "SELECT id FROM deletedProcesses WHERE id = :id"
     row = await db.connection.fetch_one(query=query, values={"id": process_id})
     return row is not None
