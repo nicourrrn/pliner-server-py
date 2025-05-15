@@ -214,11 +214,10 @@ async def update_process(db: Database, process: Process, owner: str):
     query_update = """
         UPDATE processes
         SET name = :name, description = :description, isMandatory = :isMandatory, processType = :processType,
-            timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt,
-            owner = :owner, editAt = :editAt
-        WHERE id = :id and editAt < :editAt
+            timeNeeded = :timeNeeded, groupName = :groupName, deadline = :deadline, assignedAt = :assignedAt, owner = :owner, editAt = :editAt
+        WHERE id = :id 
     """
-    values = process.model_dump(exclude={"steps"}) | {"onwer": owner}
+    values = process.model_dump(exclude={"steps"}) | {"owner": owner}
     values["assignedAt"] = from_dart_datetime_to_timestamp(process.assignedAt)
     values["editAt"] = from_dart_datetime_to_timestamp(process.editAt)
     await db.connection.execute(query=query_update, values=values)

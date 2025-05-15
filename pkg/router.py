@@ -5,7 +5,6 @@ from pkg.database import (
     create_user,
     create_process,
     delete_process,
-    delete_steps,
     get_deleted_processes,
     get_edit_at_by_user,
     get_processes_by_user,
@@ -79,13 +78,7 @@ async def get_processes_endpoint(owner: str, req: Request) -> list[Process]:
 async def get_last_updates_endpoint(owner: str, req: Request) -> list[EditAtProcess]:
     db = req.app.state.db
     try:
-        return [
-            EditAtProcess(
-                id=process.id,
-                editAt=process.editAt,
-            )
-            for process in await get_edit_at_by_user(db, owner)
-        ]
+        return await get_edit_at_by_user(db, owner)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -122,7 +115,7 @@ async def update_process_endpoint(processes: list[Process], owner: str, req: Req
             for step in process.steps:
                 await update_step(db, step)
         except Exception as e:
-            ...
+            print(e)
 
 
 @process_router.delete("/")
